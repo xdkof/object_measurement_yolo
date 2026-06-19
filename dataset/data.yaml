@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['steel plate']
+
+roboflow:
+  workspace: soumils-workspace-1s1t4
+  project: okok-amelc
+  version: dataset
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/soumils-workspace-1s1t4/okok-amelc/dataset/dataset
