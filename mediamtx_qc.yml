@@ -1,0 +1,10 @@
+rtspAddress: :8554
+rtmp: false
+hls: false
+webrtc: false
+srt: false
+moq: false
+
+paths:
+  belt_stream:
+    source: publisher
