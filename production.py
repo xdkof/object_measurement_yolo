@@ -25,8 +25,9 @@ WINDOW_NAME = "QC Operator Monitor"
 RTSP_RETRY_DELAY_SECONDS = 2
 FINAL_VERDICT_DISPLAY_SECONDS = 1.0
 FINAL_LENGTH_STABLE_FRAMES = 6
-FINAL_LENGTH_STABLE_TOLERANCE_MM = 15.0
-VALIDATION_EDGE_MARGIN_PIXELS = 8
+FINAL_LENGTH_STABLE_TOLERANCE_MM = 8.0
+FINAL_LENGTH_PASSED_PEAK_MM = 35.0
+VALIDATION_EDGE_MARGIN_PIXELS = 0
 SCRIPT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = SCRIPT_DIR / "outputs" / "production_runs"
 CSV_HEADERS = [
@@ -191,10 +192,10 @@ def box_is_ready_for_validation(box, frame_shape):
     margin = VALIDATION_EDGE_MARGIN_PIXELS
 
     return (
-        x1 >= margin
-        and y1 >= margin
-        and x2 <= frame_width - margin
-        and y2 <= frame_height - margin
+        x2 > margin
+        and y2 > margin
+        and x1 < frame_width - margin
+        and y1 < frame_height - margin
     )
 
 
@@ -415,10 +416,13 @@ def main():
             if results.boxes and results.boxes.id is not None:
                 boxes = results.boxes.xyxy.cpu().numpy()
                 track_ids = results.boxes.id.int().cpu().numpy()
-                current_frame_ids = track_ids.tolist()
+                current_frame_ids = [int(track_id) for track_id in track_ids]
 
                 for box, track_id in zip(boxes, track_ids):
                     track_id = int(track_id)
+                    if track_id in completed_ids:
+                        continue
+
                     x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
                     visible_box = (x1, y1, x2, y2)
 
@@ -436,19 +440,19 @@ def main():
                         if current_length_mm > previous_max_length:
                             max_recorded_lengths[track_id] = current_length_mm
 
-                        if abs(current_length_mm - max_recorded_lengths[track_id]) <= FINAL_LENGTH_STABLE_TOLERANCE_MM:
-                            stable_length_frames[track_id] = stable_length_frames.get(track_id, 0) + 1
-                        else:
-                            stable_length_frames[track_id] = 0
+                        stable_length_frames[track_id] = stable_length_frames.get(track_id, 0) + 1
+
+                    final_length = max_recorded_lengths[track_id]
+                    stable_ready = stable_length_frames.get(track_id, 0) >= FINAL_LENGTH_STABLE_FRAMES
+                    passed_peak_ready = current_length_mm <= final_length - FINAL_LENGTH_PASSED_PEAK_MM
 
                     last_seen_boxes[track_id] = visible_box
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 255), 2)
 
                     if (
-                        track_id not in completed_ids
-                        and max_recorded_lengths[track_id] >= MIN_VALID_LENGTH_MM
-                        and stable_length_frames.get(track_id, 0) >= FINAL_LENGTH_STABLE_FRAMES
+                        final_length >= MIN_VALID_LENGTH_MM
                         and box_is_ready_for_validation(visible_box, frame.shape)
+                        and (stable_ready or passed_peak_ready)
                     ):
                         finalize_sheet(track_id, visible_box)
 
