@@ -24,6 +24,9 @@ DEFAULT_RTSP_URL = "rtsp://localhost:8554/belt_stream"
 WINDOW_NAME = "QC Operator Monitor"
 RTSP_RETRY_DELAY_SECONDS = 2
 FINAL_VERDICT_DISPLAY_SECONDS = 1.0
+FINAL_LENGTH_STABLE_FRAMES = 6
+FINAL_LENGTH_STABLE_TOLERANCE_MM = 15.0
+VALIDATION_EDGE_MARGIN_PIXELS = 8
 SCRIPT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = SCRIPT_DIR / "outputs" / "production_runs"
 CSV_HEADERS = [
@@ -182,6 +185,19 @@ def append_result_csv_row(output_path, row):
         writer.writerow(row)
 
 
+def box_is_ready_for_validation(box, frame_shape):
+    frame_height, frame_width = frame_shape[:2]
+    x1, y1, x2, y2 = box
+    margin = VALIDATION_EDGE_MARGIN_PIXELS
+
+    return (
+        x1 >= margin
+        and y1 >= margin
+        and x2 <= frame_width - margin
+        and y2 <= frame_height - margin
+    )
+
+
 class FFmpegFrameReader:
     def __init__(self, rtsp_url):
         self.rtsp_url = rtsp_url
@@ -318,6 +334,7 @@ def main():
     completed_ids = set()
     assigned_production_ids = {}
     last_seen_boxes = {}
+    stable_length_frames = {}
     final_verdict_overlays = {}
     production_sheet_counter = 1
     
@@ -325,7 +342,7 @@ def main():
 
     print("--- Production QC Stream Active (RTSP Mode) ---")
 
-    def finalize_sheet(tid):
+    def finalize_sheet(tid, visible_box=None):
         nonlocal production_sheet_counter
 
         if tid in completed_ids:
@@ -358,9 +375,9 @@ def main():
         )
         print(f"[VERDICT] Sheet #{official_id} | Status: {status} | Final Length: {final_length:.1f} mm")
 
-        if tid in last_seen_boxes:
+        if visible_box is not None:
             final_verdict_overlays[tid] = {
-                "box": last_seen_boxes[tid],
+                "box": visible_box,
                 "official_id": official_id,
                 "status": status,
                 "final_length": final_length,
@@ -401,23 +418,43 @@ def main():
                 current_frame_ids = track_ids.tolist()
 
                 for box, track_id in zip(boxes, track_ids):
+                    track_id = int(track_id)
                     x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-                    
+                    visible_box = (x1, y1, x2, y2)
+
                     sheet_pixel_length = y2 - y1
                     current_length_mm = (sheet_pixel_length / belt_pixel_length) * VISIBLE_BELT_LENGTH_MM
-                    
-                    if track_id not in max_recorded_lengths:
-                        max_recorded_lengths[track_id] = current_length_mm
-                    elif current_length_mm > max_recorded_lengths[track_id]:
-                        max_recorded_lengths[track_id] = current_length_mm
+                    previous_max_length = max_recorded_lengths.get(track_id)
 
+                    if previous_max_length is None:
+                        max_recorded_lengths[track_id] = current_length_mm
+                        stable_length_frames[track_id] = 0
+                    elif current_length_mm > previous_max_length + FINAL_LENGTH_STABLE_TOLERANCE_MM:
+                        max_recorded_lengths[track_id] = current_length_mm
+                        stable_length_frames[track_id] = 0
+                    else:
+                        if current_length_mm > previous_max_length:
+                            max_recorded_lengths[track_id] = current_length_mm
 
-                    last_seen_boxes[track_id] = (x1, y1, x2, y2)
+                        if abs(current_length_mm - max_recorded_lengths[track_id]) <= FINAL_LENGTH_STABLE_TOLERANCE_MM:
+                            stable_length_frames[track_id] = stable_length_frames.get(track_id, 0) + 1
+                        else:
+                            stable_length_frames[track_id] = 0
+
+                    last_seen_boxes[track_id] = visible_box
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 255), 2)
+
+                    if (
+                        track_id not in completed_ids
+                        and max_recorded_lengths[track_id] >= MIN_VALID_LENGTH_MM
+                        and stable_length_frames.get(track_id, 0) >= FINAL_LENGTH_STABLE_FRAMES
+                        and box_is_ready_for_validation(visible_box, frame.shape)
+                    ):
+                        finalize_sheet(track_id, visible_box)
 
             for tid in list(max_recorded_lengths.keys()):
                 if tid not in current_frame_ids and tid not in completed_ids:
-                    finalize_sheet(tid)
+                    stable_length_frames[tid] = 0
 
             now = time.monotonic()
             for tid, overlay in list(final_verdict_overlays.items()):
@@ -459,9 +496,6 @@ def main():
                 reader.stop()
             except Exception:
                 pass
-
-        for tid in list(max_recorded_lengths.keys()):
-            finalize_sheet(tid)
 
         try:
             cv2.destroyAllWindows()
