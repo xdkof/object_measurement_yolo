@@ -427,29 +427,23 @@ def main():
 
                 x1, y1, x2, y2 = overlay["box"]
                 status = overlay["status"]
-                color = (0, 200, 0) if status == "ACCEPTED" else (0, 0, 255)
+                color = (0, 255, 0) if status == "ACCEPTED" else (255, 200, 0)
                 label = (
                     f"Sheet #{overlay['official_id']} | {status} | "
                     f"Final Length: {overlay['final_length']:.1f} mm"
                 )
                 font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.65
+                font_scale = 0.6
                 thickness = 2
                 (text_width, text_height), baseline = cv2.getTextSize(
                     label, font, font_scale, thickness
                 )
                 label_x = max(5, min(x1, frame.shape[1] - text_width - 10))
-                label_y = y1 - 12
+                label_y = y1 - 10
                 if label_y - text_height - baseline < 0:
-                    label_y = min(frame.shape[0] - baseline - 5, y2 + text_height + 12)
+                    label_y = min(frame.shape[0] - baseline - 5, y2 + text_height + 10)
 
-                cv2.rectangle(
-                    frame,
-                    (label_x - 4, label_y - text_height - 5),
-                    (label_x + text_width + 4, label_y + baseline + 4),
-                    (0, 0, 0),
-                    -1,
-                )
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(
                     frame, label, (label_x, label_y), font, font_scale, color, thickness
                 )
