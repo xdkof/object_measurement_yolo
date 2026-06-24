@@ -1,6 +1,0 @@
-{
-  "python.defaultInterpreterPath": "~/cv_master_env/bin/python",
-  "code-runner.executorMap": {
-    "python": "$pythonPath $fullFileName"
-  }
-}
