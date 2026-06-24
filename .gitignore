@@ -1,7 +1,22 @@
+# Python environments and caches
+.venv/
 venv/
 yolo_env/
-venv/
-yolo_env/
-venv/
-yolo_env/
+__pycache__/
+*.py[cod]
+
+# Local editor and OS files
+.vscode/
+.DS_Store
+
+# Runtime-generated files
 outputs/
+auto.crt
+auto.key
+*.log
+
+# Local training assets and model weights
+dataset/
+dataset_frames/
+videos/
+*.pt
