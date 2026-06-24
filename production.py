@@ -23,6 +23,7 @@ MIN_VALID_LENGTH_MM = 1000.0
 DEFAULT_RTSP_URL = "rtsp://localhost:8554/belt_stream"
 WINDOW_NAME = "QC Operator Monitor"
 RTSP_RETRY_DELAY_SECONDS = 2
+FINAL_VERDICT_DISPLAY_SECONDS = 4.0
 SCRIPT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = SCRIPT_DIR / "outputs" / "production_runs"
 CSV_HEADERS = [
@@ -315,7 +316,9 @@ def main():
 
     max_recorded_lengths = {}
     completed_ids = set()
-    assigned_production_ids = {} 
+    assigned_production_ids = {}
+    last_seen_boxes = {}
+    final_verdict_overlays = {}
     production_sheet_counter = 1
     
     belt_pixel_length = BELT_END_Y_PIXEL - BELT_START_Y_PIXEL
@@ -354,6 +357,15 @@ def main():
             },
         )
         print(f"[VERDICT] Sheet #{official_id} | Status: {status} | Final Length: {final_length:.1f} mm")
+
+        if tid in last_seen_boxes:
+            final_verdict_overlays[tid] = {
+                "box": last_seen_boxes[tid],
+                "official_id": official_id,
+                "status": status,
+                "final_length": final_length,
+                "expires_at": time.monotonic() + FINAL_VERDICT_DISPLAY_SECONDS,
+            }
 
     try:
         cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
@@ -399,20 +411,48 @@ def main():
                     elif current_length_mm > max_recorded_lengths[track_id]:
                         max_recorded_lengths[track_id] = current_length_mm
 
-                    
-                    if track_id in assigned_production_ids:
-                        official_id = assigned_production_ids[track_id]
-                        color = (0, 255, 0)
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                        cv2.putText(frame, f"Sheet #{official_id} | Final: {max_recorded_lengths[track_id]:.1f} mm", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                    else:
-                        color = (0, 255, 0) if abs(max_recorded_lengths[track_id] - TARGET_LENGTH_MM) <= TOLERANCE_MM else (255, 200, 0)
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-                        cv2.putText(frame, f"Measuring: {max_recorded_lengths[track_id]:.1f} mm", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+                    last_seen_boxes[track_id] = (x1, y1, x2, y2)
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 255), 2)
 
             for tid in list(max_recorded_lengths.keys()):
                 if tid not in current_frame_ids and tid not in completed_ids:
                     finalize_sheet(tid)
+
+            now = time.monotonic()
+            for tid, overlay in list(final_verdict_overlays.items()):
+                if now >= overlay["expires_at"]:
+                    del final_verdict_overlays[tid]
+                    continue
+
+                x1, y1, x2, y2 = overlay["box"]
+                status = overlay["status"]
+                color = (0, 200, 0) if status == "ACCEPTED" else (0, 0, 255)
+                label = (
+                    f"Sheet #{overlay['official_id']} | {status} | "
+                    f"Final Length: {overlay['final_length']:.1f} mm"
+                )
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.65
+                thickness = 2
+                (text_width, text_height), baseline = cv2.getTextSize(
+                    label, font, font_scale, thickness
+                )
+                label_x = max(5, min(x1, frame.shape[1] - text_width - 10))
+                label_y = y1 - 12
+                if label_y - text_height - baseline < 0:
+                    label_y = min(frame.shape[0] - baseline - 5, y2 + text_height + 12)
+
+                cv2.rectangle(
+                    frame,
+                    (label_x - 4, label_y - text_height - 5),
+                    (label_x + text_width + 4, label_y + baseline + 4),
+                    (0, 0, 0),
+                    -1,
+                )
+                cv2.putText(
+                    frame, label, (label_x, label_y), font, font_scale, color, thickness
+                )
 
             cv2.imshow(WINDOW_NAME, frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
